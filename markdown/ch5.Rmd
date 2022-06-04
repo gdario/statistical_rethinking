@@ -1,0 +1,151 @@
+---
+title: "Chapter 5"
+author: "Giovanni d'Ario"
+date: '2022-06-04'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## The Many Variables & The Spurious Waffles
+
+```{r}
+library(rethinking)
+library(dagitty)
+library(tidyverse)
+data("WaffleDivorce")
+```
+
+### Visualizing Divorce Rates
+
+```{r}
+WaffleDivorce <- WaffleDivorce %>%
+  mutate(State = fct_reorder(Location, Divorce))
+```
+
+```{r, fig.height=5, fig.width=4}
+WaffleDivorce %>%
+  ggplot(aes(x = State, y = Divorce)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = Divorce - 2*Divorce.SE,
+                    ymax = Divorce + 2*Divorce.SE)) +
+  ylab("Divorce Rate per 1000 People") +
+  coord_flip()
+```
+### Setting up the dataset
+
+To fix ideas we have the following values for the standard deviations of variables of interest.
+
+| Column | Mean | Std. Dev |
+|------|----------|--------|
+| Divorce rate: |`r round(mean(WaffleDivorce$Divorce), 2)` | `r round(sd(WaffleDivorce$Divorce), 2)` |
+| Marriage rate: |`r round(mean(WaffleDivorce$Marriage), 2)` | `r round(sd(WaffleDivorce$Marriage), 2)` |
+| Median age at marriage: |`r round(mean(WaffleDivorce$MedianAgeMarriage), 2)` | `r round(sd(WaffleDivorce$MedianAgeMarriage), 2)` |
+
+```{r standardize_vars}
+d <- WaffleDivorce %>%
+  mutate(D = standardize(Divorce),
+         M = standardize(Marriage),
+         A = standardize(MedianAgeMarriage))
+```
+
+### Simulate from the priors
+
+```{r simul_priors}
+m5.1 <- quap(
+  alist(
+    D ~ dnorm(mu, sigma),
+    mu <- a + bA * A,
+    a ~ dnorm(0, 0.2),
+    bA ~ dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ), data = d
+)
+```
+
+
+```{r}
+set.seed(10)
+prior <- extract.prior(m5.1)
+mu <- link(m5.1, post = prior, data = list(A = c(-2, 2)))
+```
+
+#### Plotting the prior using R Graphics
+
+```{r}
+color <- adjustcolor("black", alpha.f = 0.3)
+matplot(x = c(-2, 2), y = t(mu[1:50, ]),
+        type = "l", lty = 1, 
+        alpha = 0.2, col = color,
+        xlab = "Median age marriage (std)",
+        ylab = "Divorce rate (std)")
+```
+
+### Model with both predictors
+
+```{r}
+m5.3 <- quap(
+  alist(
+    D ~ dnorm(mu, sigma),
+    mu <- a + bM * M + bA * A,
+    a ~ dnorm(0, 0.2),
+    bM ~ dnorm(0, 0.5),
+    bA ~ dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ), data = d
+)
+
+precis(m5.3)
+```
+
+```{r}
+plot(coeftab(m5.1, m5.3), par = c("bA", "bM"))
+```
+### Predictor residual plots
+
+```{r}
+m5.4 <- quap(
+  alist(
+    M ~ dnorm(mu, sigma),
+    mu <- a + bA * A,
+    a ~ dnorm(0, 0.2),
+    bA ~ dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ), data = d
+)
+```
+
+```{r}
+post <- link(m5.4)
+mu_mean <- colMeans(post)
+mu_resid <- d$M - mu_mean
+```
+
+```{r}
+dres <- data.frame(D = d$D, mu_res = mu_resid)
+
+m5.4.1 <- quap(
+  alist(
+    D ~ dnorm(mu, sigma),
+    mu <- a + bR * mu_res,
+    a ~ dnorm(0, 0.2),
+    bR ~ dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ), data = dres
+)
+```
+
+```{r}
+res_seq <- seq(from = -2, to = 2, length.out = 30)
+post <- link(m5.4.1, data = list(mu_res = res_seq))
+m <- apply(post, 2, mean)
+s <- apply(post, 2, PI)
+plot(mu_resid, d$D, xlab = "Marriage rate residuals",
+     ylab = "Divorce rate (std)")
+lines(x = res_seq, y = m, lwd = 2)
+shade(s, res_seq)
+abline( v = 0, lty = 2)
+```
+
